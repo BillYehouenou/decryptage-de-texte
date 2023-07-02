@@ -1,0 +1,135 @@
+---
+title: "Projet Magistère : Déchiffrement d'un texte par MCMC"
+author: "Bill Yehouenou"
+date: "2022-12-08"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(corrplot)
+```
+
+Avant toute chose, nous avons choisi un texte de référence qui nous servira de bibliothèque linguistique afin d'avoir notre matrice stochastique de transition.
+
+# 1. Création de la matrice de transition
+
+La première étape consiste à créer la matrice de probabilité de transition. Pour ce faire, on a fait une boucle à travers chaque caractère pour avoir sa fréquence d'apparition après un autre caractère. On a utilisé 27 caractères en considérant les 26 lettres de l'alphabet et le caractère espace __""__. Après cette étape, on normalise en divisant par le total des lignes. Pour éviter qu'il n'y ait une probabilité nulle, on a ajouté 1 à chaque cellule.
+
+```{r creation de la matrice de transition}
+biblio <- readLines("fable.txt") # Lecture du texte de référence
+biblio <- paste(biblio, collapse = " ")
+biblio <- tolower(biblio)
+trans_mat=matrix(0,27,27) # matrice vide des 27 caractères
+symbols <- c(letters," ")
+rownames(trans_mat) = colnames(trans_mat) = symbols
+for (i in 1:(nchar(biblio)-1)){
+    l1 <- substring(biblio,i,i)
+    l2 <- substring(biblio,i+1,i+1)
+    if (l1 %in% symbols){
+      trans_mat[which(symbols==l1),
+                which(symbols==l2)] = 
+        trans_mat[which(symbols==l1),
+                which(symbols==l2)] + 1
+      l1 <- l2 
+  }
+}
+# calcul des probabilités d'apparitions
+trans.prob.mat=sweep(trans_mat+1,1,rowSums(trans_mat+1),FUN="/")
+```
+
+Nous avons décider de visualiser cette matrice pour vérifier si les résultats sont conformes à la réalité. 
+
+```{r visualisation de la matrice de transition}
+corrplot(trans.prob.mat,method = "color")
+```
+
+On remarque des similarités évidentes dans la langue française comme la lettre __q__ qui est genéralement suivi par la lettre __u__, la lettre __e__ est la voyelle la plus utilisée et les lettres __z__ et __x__ sont souvent utilisées en fin de phrase.
+
+# 2. Création des fonctions de cryptage et calcul de la vraisemblance du texte décodé
+
+Dans l'optique de décrypter un texte, nous avons besoin d'une fonction de cryptage pour trouver les propositions de décryptage mais aussi d'une fonction de calcul des probabilités pour la vraisemblance. Cela nous permettra de mettre en oeuvre un test avec l'Algorithme de Metropolis-Hastings et de pouvoir choisir la proposition la plus convenable.
+
+```{r cryptage et calcul de la vraisemblance du texte decode}
+# fonction pour crypter le texte chiffré
+cryptage <- function(cle,correctTxt) {
+  correctTxt = tolower(correctTxt)
+  codeTxt = correctTxt
+  for (i in 1:nchar(correctTxt)) {
+    if (substring(correctTxt,i,i) %in% tolower(letters)) {
+      substring(codeTxt,i,i) <- letters[cle==substring(correctTxt,i,i)]
+    }
+  }
+  codeTxt
+}
+# fonction de likelihood qui calcule la probabilité du texte chiffré
+log.prob <- function(cle,codeTxt) {
+  logprob=0
+  
+  for (i in 1:(nchar(codeTxt)-1)){
+    l1 <- substring(codeTxt,i,i)
+    l2 <- substring(codeTxt,i+1,i+1)
+    if (l1 %in% symbols){
+      logprob = logprob + log(trans.prob.mat[which(symbols==l1),
+                which(symbols==l2)])
+      l1 <- l2
+    }
+  }
+  logprob
+}
+```
+
+```{r cle de substitution et mot a decoder, echo=FALSE}
+cle=sample(letters) # Initialisation de la table de substitution avec des valeurs aléatoires
+correctTxt = "Le prince Charles est mort le diamanche au lever du soleil sans que les oiseaux ne commencent a chanter"
+texte.crypte <- cryptage(cle,correctTxt) # crypter aléatoirement du texte
+```
+
+# 3. Algorithme de Metropolis Hastings
+
+L'algorithme de Metropolis-Hastings utilise, dans notre cas, les chaines de Markov et les simulations de Monte Carlo pour obtenir des _propositions aléatoires_ de texte dont on accepte ou non la cohérence en fonction d'un ratio d'acceptation.
+
+```{r algorithme de Metropolis Hastings}
+algo.metropolis <- function(i,MaxRep,codeTxt){
+  # Inititialisation des variables nécessaires (actuel décryptage, probabilité associé)
+  nouveau.code=cryptage(cle,codeTxt)
+  nouvelle.proba=log.prob(cle,nouveau.code)
+  meilleur.proba=nouvelle.proba
+  meilleur.code=nouveau.code
+  while (i<=MaxRep) {
+    # Génération d'une nouvelle clé de substitution en modifiant une seule lettre
+    choix.lettre=sample(1:26,2) # choisir deux lettres à remplacer
+    nouvelle.cle=cle
+    nouvelle.cle[choix.lettre[1]]=cle[choix.lettre[2]]
+    nouvelle.cle[choix.lettre[2]]=cle[choix.lettre[1]]
+  
+    # Proposition d'un décodage et d'une vraisemblance associé
+    prop.code=cryptage(nouvelle.cle,codeTxt)
+    prop.logprob=log.prob(nouvelle.cle,prop.code)
+    # Décision d'accepter ou de rejeter la nouvelle clé de substitution
+    if (runif(1)<exp(prop.logprob-nouvelle.proba)) {
+      cle=nouvelle.cle
+      nouveau.code=prop.code
+      nouvelle.proba=prop.logprob
+ 
+      if (nouvelle.proba>meilleur.proba) {
+        # Réattribution des valeurs pour la prochaine boucle 
+        meilleur.proba=nouvelle.proba
+        meilleur.code=nouveau.code
+      }
+    # Renvoie une version concatenée du résultat trouvé
+      cat(i,nouveau.code,"\n")
+      i=i+1
+    }
+  }
+}
+
+#set.seed(268)
+algo.metropolis(1,1500,texte.crypte)
+```
+
+On constate que le texte décrypté se rapproche de plus en plus du texte correcte.
+
+# 4. Limite de la méthode MCMC pour le déchiffrement
+
+La méthode de Monte Carlo par chaîne de Markov présente néanmoins quelques insuffisances qu'il est nécessaire ici de relever. En effet, elle passe à n'importe quelle propositiion qui augmente la probabilité. Le problème est qu'elle peut rester bloquée dans une proposition notamment si on ne fait pas suffisamment d'itérations. Toutefois avec des itérations très importantes, l'algorithme se déplace vers d'autres clés de substitutions beaucoup plus réalistes, ce qui permet de se rapprocher de la bonne solution.
